@@ -7,8 +7,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
-const OCPP_PORT = 9220;
+const PORT = process.env.PORT || 3000;
+const OCPP_PORT = process.env.OCPP_PORT || 9220;
+const HOST = process.env.HOST || '0.0.0.0';
 
 // Middleware
 app.use(express.json());
@@ -19,9 +20,13 @@ const clients = new Map();
 const pendingRequests = new Map();
 let messageIdCounter = 1;
 
+const serverUrl = process.env.SERVER_URL || `http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`;
+const wsUrl = process.env.WS_URL || `ws://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${OCPP_PORT}`;
+
 console.log('🚀 CSMS Server starting...');
-console.log(`📊 Dashboard: http://localhost:${PORT}`);
-console.log(`🔌 OCPP WebSocket: ws://localhost:${OCPP_PORT}`);
+console.log(`📊 Dashboard: ${serverUrl}`);
+console.log(`🔌 OCPP WebSocket: ${wsUrl}`);
+console.log(`🌐 Listening on: ${HOST}`);
 console.log('');
 
 // Helper function to send OCPP command to charger
@@ -157,7 +162,7 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/csms.html'));
 });
 
-const wss = new WebSocketServer({ port: OCPP_PORT });
+const wss = new WebSocketServer({ host: HOST, port: OCPP_PORT });
 
 wss.on('connection', (ws, req) => {
   const chargePointId = req.url.slice(1);
@@ -211,7 +216,7 @@ wss.on('connection', (ws, req) => {
 });
 
 // Start HTTP server
-app.listen(PORT, () => {
+app.listen(PORT, HOST, () => {
   console.log('Available endpoints:');
   console.log('  GET  /api/chargers');
   console.log('  POST /api/chargers/:id/remote-start');
