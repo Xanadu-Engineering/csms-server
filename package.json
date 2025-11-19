@@ -1,0 +1,23 @@
+{
+  "name": "csms-server",
+  "version": "1.0.0",
+  "description": "CSMS (Charging Station Management System) Server - Monitor and control OCPP chargers",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "keywords": [
+    "csms",
+    "ocpp",
+    "charging-station",
+    "management"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.18.3"
+  }
+}
