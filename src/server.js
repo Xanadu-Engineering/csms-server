@@ -23,7 +23,7 @@ const pendingRequests = new Map();
 let messageIdCounter = 1;
 
 const serverUrl = process.env.SERVER_URL || `http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`;
-const wsUrl = USE_SAME_PORT 
+const wsUrl = USE_SAME_PORT
   ? (process.env.WS_URL || `ws://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`)
   : (process.env.WS_URL || `ws://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${OCPP_PORT}`);
 
@@ -164,8 +164,8 @@ app.post('/api/chargers/:id/get-configuration', async (req, res) => {
 
 // Health check endpoint for Digital Ocean App Platform
 app.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'healthy', 
+  res.status(200).json({
+    status: 'healthy',
     timestamp: new Date().toISOString(),
     uptime: process.uptime()
   });
@@ -182,9 +182,17 @@ const server = createServer(app);
 let wss;
 if (USE_SAME_PORT) {
   // Attach WebSocket server to HTTP server (for App Platform)
-  wss = new WebSocketServer({ 
+  // Use verifyClient to check path starts with /ocpp
+  wss = new WebSocketServer({
     server,
-    path: '/ocpp' // WebSocket path prefix
+    verifyClient: (info) => {
+      // Verify that the path starts with /ocpp
+      const path = info.req.url || '';
+      if (!path.startsWith('/ocpp')) {
+        return false;
+      }
+      return true;
+    }
   });
   console.log('📡 WebSocket server attached to HTTP server on /ocpp path');
 } else {
@@ -195,16 +203,21 @@ if (USE_SAME_PORT) {
 
 wss.on('connection', (ws, req) => {
   // Extract charge point ID from URL
-  // If using same port, path will be /ocpp/CHARGE_POINT_ID
-  // If using separate port, path will be /CHARGE_POINT_ID
+  // When using same port, req.url will be '/ocpp/CHARGE_POINT_ID'
+  // When using separate port, req.url will be '/CHARGE_POINT_ID'
   const pathParts = req.url.split('/').filter(p => p);
-  const chargePointId = USE_SAME_PORT 
-    ? (pathParts[1] || pathParts[0] || 'unknown')
+  // If path starts with 'ocpp', the charge point ID is the next part
+  const chargePointId = pathParts[0] === 'ocpp'
+    ? (pathParts[1] || 'unknown')
     : (pathParts[0] || 'unknown');
-  
+
+  if (chargePointId === 'unknown') {
+    console.warn(`⚠️  Warning: Could not extract charge point ID from URL: ${req.url}`);
+  }
+
   ws.connectedAt = new Date();
   clients.set(chargePointId, ws);
-  console.log(`\n🔗 New charging station connected: ${chargePointId}\n`);
+  console.log(`\n🔗 New charging station connected: ${chargePointId} (from ${req.url})\n`);
 
   ws.on('message', async (data) => {
     try {
