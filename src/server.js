@@ -1,5 +1,6 @@
 import express from 'express';
 import { WebSocketServer } from 'ws';
+import { createServer } from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -10,6 +11,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const OCPP_PORT = process.env.OCPP_PORT || 9220;
 const HOST = process.env.HOST || '0.0.0.0';
+const USE_SAME_PORT = process.env.USE_SAME_PORT === 'true' || process.env.OCPP_PORT === undefined;
 
 // Middleware
 app.use(express.json());
@@ -21,11 +23,13 @@ const pendingRequests = new Map();
 let messageIdCounter = 1;
 
 const serverUrl = process.env.SERVER_URL || `http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`;
-const wsUrl = process.env.WS_URL || `ws://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${OCPP_PORT}`;
+const wsUrl = USE_SAME_PORT 
+  ? (process.env.WS_URL || `ws://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`)
+  : (process.env.WS_URL || `ws://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${OCPP_PORT}`);
 
 console.log('🚀 CSMS Server starting...');
 console.log(`📊 Dashboard: ${serverUrl}`);
-console.log(`🔌 OCPP WebSocket: ${wsUrl}`);
+console.log(`🔌 OCPP WebSocket: ${wsUrl}${USE_SAME_PORT ? ' (on same port as HTTP)' : ''}`);
 console.log(`🌐 Listening on: ${HOST}`);
 console.log('');
 
@@ -158,14 +162,46 @@ app.post('/api/chargers/:id/get-configuration', async (req, res) => {
   }
 });
 
+// Health check endpoint for Digital Ocean App Platform
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'healthy', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/csms.html'));
 });
 
-const wss = new WebSocketServer({ host: HOST, port: OCPP_PORT });
+// Create HTTP server
+const server = createServer(app);
+
+// WebSocket server setup
+let wss;
+if (USE_SAME_PORT) {
+  // Attach WebSocket server to HTTP server (for App Platform)
+  wss = new WebSocketServer({ 
+    server,
+    path: '/ocpp' // WebSocket path prefix
+  });
+  console.log('📡 WebSocket server attached to HTTP server on /ocpp path');
+} else {
+  // Separate WebSocket server on different port
+  wss = new WebSocketServer({ host: HOST, port: OCPP_PORT });
+  console.log(`📡 WebSocket server on separate port: ${OCPP_PORT}`);
+}
 
 wss.on('connection', (ws, req) => {
-  const chargePointId = req.url.slice(1);
+  // Extract charge point ID from URL
+  // If using same port, path will be /ocpp/CHARGE_POINT_ID
+  // If using separate port, path will be /CHARGE_POINT_ID
+  const pathParts = req.url.split('/').filter(p => p);
+  const chargePointId = USE_SAME_PORT 
+    ? (pathParts[1] || pathParts[0] || 'unknown')
+    : (pathParts[0] || 'unknown');
+  
   ws.connectedAt = new Date();
   clients.set(chargePointId, ws);
   console.log(`\n🔗 New charging station connected: ${chargePointId}\n`);
@@ -216,8 +252,9 @@ wss.on('connection', (ws, req) => {
 });
 
 // Start HTTP server
-app.listen(PORT, HOST, () => {
+server.listen(PORT, HOST, () => {
   console.log('Available endpoints:');
+  console.log('  GET  /health (health check)');
   console.log('  GET  /api/chargers');
   console.log('  POST /api/chargers/:id/remote-start');
   console.log('  POST /api/chargers/:id/remote-stop');
@@ -225,6 +262,9 @@ app.listen(PORT, HOST, () => {
   console.log('  POST /api/chargers/:id/reset');
   console.log('  POST /api/chargers/:id/change-configuration');
   console.log('  POST /api/chargers/:id/get-configuration');
+  if (USE_SAME_PORT) {
+    console.log(`  WS   /ocpp/:chargePointId (WebSocket on same port)`);
+  }
 });
 
 process.on('SIGINT', () => {
