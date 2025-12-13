@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { existsSync } from 'fs';
+import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -78,11 +78,20 @@ export default function createRoutes(clients, sendCommandToCharger, getConnector
   // Remote Start
   router.post('/api/chargers/:id/remote-start', async (req, res) => {
     try {
+      // #region agent log
+      try{fs.appendFileSync('/Users/a/Desktop/csms-full-demo/.cursor/debug.log',JSON.stringify({location:'routes/index.js:80',message:'Remote start request received',data:{chargerId:req.params.id,requestBody:req.body},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})+'\n');}catch(e){}
+      // #endregion
       const { idTag = 'REMOTE-TAG', connectorId = 1 } = req.body;
+      // #region agent log
+      try{fs.appendFileSync('/Users/a/Desktop/csms-full-demo/.cursor/debug.log',JSON.stringify({location:'routes/index.js:84',message:'Extracted connectorId from request',data:{connectorId:connectorId,idTag:idTag},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})+'\n');}catch(e){}
+      // #endregion
       const response = await sendCommandToCharger(req.params.id, 'RemoteStartTransaction', {
         idTag,
         connectorId
       });
+      // #region agent log
+      try{fs.appendFileSync('/Users/a/Desktop/csms-full-demo/.cursor/debug.log',JSON.stringify({location:'routes/index.js:91',message:'Remote start command sent',data:{connectorId:connectorId,response:response},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})+'\n');}catch(e){}
+      // #endregion
       res.json({ success: true, response });
     } catch (error) {
       res.status(500).json({ success: false, error: error.message });
@@ -158,11 +167,7 @@ export default function createRoutes(clients, sendCommandToCharger, getConnector
   });
 
   router.get('/', (req, res) => {
-    // #region agent log
-    const htmlPath = path.join(__dirname, '../../public/csms.html');
-    fetch('http://127.0.0.1:7244/ingest/de05f8cb-b467-480c-9bd1-258c14112157', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'routes/index.js:160', message: 'Resolving csms.html path', data: { __dirname, htmlPath, pathExists: existsSync(htmlPath) }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'A' }) }).catch(() => { });
-    // #endregion
-    res.sendFile(htmlPath);
+    res.sendFile(path.join(__dirname, '../../public/csms.html'));
   });
 
   return router;

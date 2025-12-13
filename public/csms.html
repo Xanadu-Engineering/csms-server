@@ -456,7 +456,60 @@
 
       let connectorData = {}
 
+      // Save form values before re-rendering
+      function saveFormValues() {
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/de05f8cb-b467-480c-9bd1-258c14112157',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'csms.html:460',message:'saveFormValues called',data:{timestamp:Date.now()},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
+        const values = {}
+        const inputs = ['startIdTag', 'startConnector', 'stopTransactionId', 'unlockConnector', 'resetType', 'configKey', 'configValue', 'getConfigKey']
+        inputs.forEach(id => {
+          const elem = document.getElementById(id)
+          if (elem) {
+            values[id] = elem.value
+            // #region agent log
+            if (id === 'startConnector') {
+              fetch('http://127.0.0.1:7244/ingest/de05f8cb-b467-480c-9bd1-258c14112157',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'csms.html:467',message:'Saved startConnector value',data:{id:id,value:elem.value},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+            }
+            // #endregion
+          }
+        })
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/de05f8cb-b467-480c-9bd1-258c14112157',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'csms.html:469',message:'saveFormValues returning',data:{savedValues:values},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
+        return values
+      }
+
+      // Restore form values after re-rendering
+      function restoreFormValues(values) {
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/de05f8cb-b467-480c-9bd1-258c14112157',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'csms.html:473',message:'restoreFormValues called',data:{valuesToRestore:values},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
+        Object.keys(values).forEach(id => {
+          // Use setTimeout to ensure DOM is ready
+          setTimeout(() => {
+            const elem = document.getElementById(id)
+            if (elem) {
+              // #region agent log
+              if (id === 'startConnector') {
+                fetch('http://127.0.0.1:7244/ingest/de05f8cb-b467-480c-9bd1-258c14112157',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'csms.html:479',message:'Restoring startConnector value',data:{id:id,oldValue:elem.value,newValue:values[id]},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+              }
+              // #endregion
+              elem.value = values[id]
+              // #region agent log
+              if (id === 'startConnector') {
+                fetch('http://127.0.0.1:7244/ingest/de05f8cb-b467-480c-9bd1-258c14112157',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'csms.html:481',message:'startConnector value after restore',data:{id:id,actualValue:elem.value},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+              }
+              // #endregion
+            }
+          }, 0)
+        })
+      }
+
       async function renderControlPanel() {
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/de05f8cb-b467-480c-9bd1-258c14112157',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'csms.html:485',message:'renderControlPanel called',data:{selectedCharger:selectedCharger?.id,stackTrace:new Error().stack.split('\n').slice(1,4).join('|')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A,B,D,E'})}).catch(()=>{});
+        // #endregion
         const container = document.getElementById("controlPanel")
 
         if (!selectedCharger) {
@@ -468,6 +521,12 @@
                 `
           return
         }
+
+        // Save form values before re-rendering
+        const savedValues = saveFormValues()
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/de05f8cb-b467-480c-9bd1-258c14112157',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'csms.html:499',message:'After saveFormValues in renderControlPanel',data:{savedValues:savedValues},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A,C'})}).catch(()=>{});
+        // #endregion
 
         // Fetch connector status
         try {
@@ -501,6 +560,16 @@
             }).join('')
           : '<div class="detail-row">No connector status available</div>'
 
+        // Use saved values or defaults for form inputs
+        const startConnectorValue = savedValues.startConnector || '1'
+        const startIdTagValue = savedValues.startIdTag || 'REMOTE-START-TAG'
+        const unlockConnectorValue = savedValues.unlockConnector || '1'
+        const resetTypeValue = savedValues.resetType || 'Soft'
+        const configKeyValue = savedValues.configKey || 'HeartbeatInterval'
+        const configValueValue = savedValues.configValue || '60'
+        const getConfigKeyValue = savedValues.getConfigKey || ''
+        const stopTransactionIdValue = savedValues.stopTransactionId || ''
+
         container.innerHTML = `
                 <div class="charger-details">
                     <h3>Charger Details</h3>
@@ -529,8 +598,8 @@
                     <div class="command-group">
                         <h4>🔋 Remote Start Transaction</h4>
                         <div class="command-form">
-                            <input type="text" id="startIdTag" placeholder="ID Tag" value="REMOTE-START-TAG">
-                            <input type="number" id="startConnector" placeholder="Connector ID" value="1" min="1" onchange="updateStartButtonState()">
+                            <input type="text" id="startIdTag" placeholder="ID Tag" value="${startIdTagValue}">
+                            <input type="number" id="startConnector" placeholder="Connector ID" value="${startConnectorValue}" min="1" onchange="updateStartButtonState()">
                             <button id="startChargingBtn" onclick="sendRemoteStart()">Start Charging</button>
                         </div>
                         <div id="startButtonMessage" style="font-size: 0.85em; margin-top: 5px; color: #666;"></div>
@@ -539,7 +608,7 @@
                     <div class="command-group">
                         <h4>⏹️ Remote Stop Transaction</h4>
                         <div class="command-form">
-                            <input type="number" id="stopTransactionId" placeholder="Transaction ID" min="1">
+                            <input type="number" id="stopTransactionId" placeholder="Transaction ID" value="${stopTransactionIdValue}" min="1">
                             <button onclick="sendRemoteStop()">Stop Charging</button>
                         </div>
                     </div>
@@ -547,7 +616,7 @@
                     <div class="command-group">
                         <h4>🔓 Unlock Connector</h4>
                         <div class="command-form">
-                            <input type="number" id="unlockConnector" placeholder="Connector ID" value="1" min="1">
+                            <input type="number" id="unlockConnector" placeholder="Connector ID" value="${unlockConnectorValue}" min="1">
                             <button onclick="sendUnlock()">Unlock</button>
                         </div>
                     </div>
@@ -556,8 +625,8 @@
                         <h4>🔄 Reset Charger</h4>
                         <div class="command-form">
                             <select id="resetType">
-                                <option value="Soft">Soft Reset</option>
-                                <option value="Hard">Hard Reset</option>
+                                <option value="Soft" ${resetTypeValue === 'Soft' ? 'selected' : ''}>Soft Reset</option>
+                                <option value="Hard" ${resetTypeValue === 'Hard' ? 'selected' : ''}>Hard Reset</option>
                             </select>
                             <button onclick="sendReset()">Reset</button>
                         </div>
@@ -566,8 +635,8 @@
                     <div class="command-group">
                         <h4>⚙️ Change Configuration</h4>
                         <div class="command-form">
-                            <input type="text" id="configKey" placeholder="Key" value="HeartbeatInterval">
-                            <input type="text" id="configValue" placeholder="Value" value="60">
+                            <input type="text" id="configKey" placeholder="Key" value="${configKeyValue}">
+                            <input type="text" id="configValue" placeholder="Value" value="${configValueValue}">
                             <button onclick="sendChangeConfiguration()">Change</button>
                         </div>
                     </div>
@@ -575,12 +644,24 @@
                     <div class="command-group">
                         <h4>📖 Get Configuration</h4>
                         <div class="command-form">
-                            <input type="text" id="getConfigKey" placeholder="Key (optional)">
+                            <input type="text" id="getConfigKey" placeholder="Key (optional)" value="${getConfigKeyValue}">
                             <button onclick="sendGetConfiguration()">Get Config</button>
                         </div>
                     </div>
                 </div>
             `
+        // Values are now set directly in the template, but still update button state after DOM is ready
+        setTimeout(() => {
+          // #region agent log
+          fetch('http://127.0.0.1:7244/ingest/de05f8cb-b467-480c-9bd1-258c14112157',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'csms.html:644',message:'After renderControlPanel, updating button state',data:{startConnectorValue:savedValues.startConnector},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A,C'})}).catch(()=>{});
+          // #endregion
+          // Update button state after DOM is ready
+          updateStartButtonState()
+          // #region agent log
+          const connectorInput = document.getElementById("startConnector")
+          fetch('http://127.0.0.1:7244/ingest/de05f8cb-b467-480c-9bd1-258c14112157',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'csms.html:650',message:'After updateStartButtonState',data:{startConnectorValue:connectorInput?.value},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A,C'})}).catch(()=>{});
+          // #endregion
+        }, 10)
       }
 
       function updateStartButtonState() {
@@ -605,16 +686,26 @@
       }
 
       async function sendRemoteStart() {
+        // #region agent log
+        const connectorInputBefore = document.getElementById("startConnector")
+        fetch('http://127.0.0.1:7244/ingest/de05f8cb-b467-480c-9bd1-258c14112157',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'csms.html:642',message:'sendRemoteStart called',data:{connectorInputValue:connectorInputBefore?.value,connectorInputExists:!!connectorInputBefore},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+        // #endregion
         const idTag = document.getElementById("startIdTag").value
         const connectorId = parseInt(
           document.getElementById("startConnector").value
         )
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/de05f8cb-b467-480c-9bd1-258c14112157',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'csms.html:646',message:'ConnectorId read from input',data:{connectorId:connectorId,idTag:idTag},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+        // #endregion
 
         await sendCommand(
           "remote-start",
           { idTag, connectorId },
           "Remote Start Transaction"
         )
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/de05f8cb-b467-480c-9bd1-258c14112157',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'csms.html:652',message:'After sendCommand, about to call renderControlPanel',data:{connectorId:connectorId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A,E'})}).catch(()=>{});
+        // #endregion
         // Refresh connector status after starting
         if (selectedCharger) {
           renderControlPanel()
@@ -727,12 +818,14 @@
 
       // Auto-refresh every 5 seconds
       setInterval(() => {
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/de05f8cb-b467-480c-9bd1-258c14112157',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'csms.html:764',message:'Auto-refresh interval triggered',data:{selectedCharger:selectedCharger?.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
         refreshChargers()
         // Also refresh control panel if a charger is selected
+        // Note: renderControlPanel now preserves form values
         if (selectedCharger) {
-          renderControlPanel().then(() => {
-            updateStartButtonState()
-          })
+          renderControlPanel()
         }
       }, 5000)
 
