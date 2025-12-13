@@ -137,6 +137,39 @@
         color: white;
       }
 
+      .status-charging {
+        background: #ff9800;
+        color: white;
+      }
+
+      .status-available {
+        background: #4caf50;
+        color: white;
+      }
+
+      .status-other {
+        background: #9e9e9e;
+        color: white;
+      }
+
+      .plug-status-badge {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 0.85em;
+        font-weight: normal;
+      }
+
+      .plug-status-badge.plugged {
+        background-color: #4caf50;
+        color: white;
+      }
+
+      .plug-status-badge.unplugged {
+        background-color: #9e9e9e;
+        color: white;
+      }
+
       .charger-details {
         background: #f8f9fa;
         padding: 15px;
@@ -414,11 +447,16 @@
       function selectCharger(chargerId) {
         selectedCharger = chargers.find((c) => c.id === chargerId)
         renderChargersList()
-        renderControlPanel()
+        renderControlPanel().then(() => {
+          // Update button state after panel is rendered
+          updateStartButtonState()
+        })
         logMessage("info", `Selected charger: ${chargerId}`)
       }
 
-      function renderControlPanel() {
+      let connectorData = {}
+
+      async function renderControlPanel() {
         const container = document.getElementById("controlPanel")
 
         if (!selectedCharger) {
@@ -430,6 +468,38 @@
                 `
           return
         }
+
+        // Fetch connector status
+        try {
+          const response = await fetch(`/api/chargers/${selectedCharger.id}/connectors`)
+          const data = await response.json()
+          connectorData = {}
+          if (data.connectors) {
+            data.connectors.forEach(conn => {
+              connectorData[conn.connectorId] = conn
+            })
+          }
+        } catch (error) {
+          console.error("Error fetching connector status:", error)
+        }
+
+        // Build connector status HTML
+        const connectorsHtml = Object.keys(connectorData).length > 0
+          ? Object.values(connectorData).map(conn => {
+              const plugStatus = conn.pluggedIn ? '🔌 Plugged In' : '🔌 Not Plugged'
+              const plugClass = conn.pluggedIn ? 'plugged' : 'unplugged'
+              return `
+                <div class="detail-row" style="border-bottom: 1px solid #e0e0e0; padding: 10px 0;">
+                  <div>
+                    <strong>Connector ${conn.connectorId}</strong>
+                    <span class="status-badge ${conn.state === 'Charging' ? 'status-charging' : conn.state === 'Available' ? 'status-available' : 'status-other'}" style="margin-left: 10px;">${conn.state || 'Unknown'}</span>
+                    <span class="plug-status-badge ${plugClass}" style="margin-left: 10px;">${plugStatus}</span>
+                  </div>
+                  ${conn.transactionId ? `<div style="font-size: 0.9em; color: #666; margin-top: 5px;">Transaction ID: ${conn.transactionId}</div>` : ''}
+                </div>
+              `
+            }).join('')
+          : '<div class="detail-row">No connector status available</div>'
 
         container.innerHTML = `
                 <div class="charger-details">
@@ -450,14 +520,20 @@
                     </div>
                 </div>
 
+                <div class="charger-details" style="margin-top: 20px;">
+                    <h3>Connector Status</h3>
+                    ${connectorsHtml}
+                </div>
+
                 <div class="command-section">
                     <div class="command-group">
                         <h4>🔋 Remote Start Transaction</h4>
                         <div class="command-form">
                             <input type="text" id="startIdTag" placeholder="ID Tag" value="REMOTE-START-TAG">
-                            <input type="number" id="startConnector" placeholder="Connector ID" value="1" min="1">
-                            <button onclick="sendRemoteStart()">Start Charging</button>
+                            <input type="number" id="startConnector" placeholder="Connector ID" value="1" min="1" onchange="updateStartButtonState()">
+                            <button id="startChargingBtn" onclick="sendRemoteStart()">Start Charging</button>
                         </div>
+                        <div id="startButtonMessage" style="font-size: 0.85em; margin-top: 5px; color: #666;"></div>
                     </div>
 
                     <div class="command-group">
@@ -507,6 +583,27 @@
             `
       }
 
+      function updateStartButtonState() {
+        const connectorId = parseInt(document.getElementById("startConnector")?.value || "1")
+        const btn = document.getElementById("startChargingBtn")
+        const msg = document.getElementById("startButtonMessage")
+        
+        if (!btn || !msg) return
+
+        const connector = connectorData[connectorId]
+        if (connector && connector.pluggedIn) {
+          btn.disabled = false
+          btn.title = ""
+          msg.textContent = "Ready to start charging"
+          msg.style.color = "#4caf50"
+        } else {
+          btn.disabled = true
+          btn.title = "EV must be plugged in to start charging"
+          msg.textContent = "EV must be plugged in before starting charging"
+          msg.style.color = "#f44336"
+        }
+      }
+
       async function sendRemoteStart() {
         const idTag = document.getElementById("startIdTag").value
         const connectorId = parseInt(
@@ -518,6 +615,10 @@
           { idTag, connectorId },
           "Remote Start Transaction"
         )
+        // Refresh connector status after starting
+        if (selectedCharger) {
+          renderControlPanel()
+        }
       }
 
       async function sendRemoteStop() {
@@ -625,7 +726,15 @@
       }
 
       // Auto-refresh every 5 seconds
-      setInterval(refreshChargers, 5000)
+      setInterval(() => {
+        refreshChargers()
+        // Also refresh control panel if a charger is selected
+        if (selectedCharger) {
+          renderControlPanel().then(() => {
+            updateStartButtonState()
+          })
+        }
+      }, 5000)
 
       // Initial load
       refreshChargers()
