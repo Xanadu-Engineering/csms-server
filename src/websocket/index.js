@@ -4,11 +4,52 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
   // Store connected chargers and pending requests
   const clients = new Map();
   const pendingRequests = new Map();
+  // Store pending connections: ws -> { urlChargePointId, connectedAt, timeout }
+  const pendingConnections = new Map();
   // Store connector status: chargePointId -> Map(connectorId -> status object)
   const connectorStatus = new Map();
   // Store active transactions: chargePointId -> Map(connectorId -> transactionId)
   const activeTransactions = new Map();
   let messageIdCounter = 1;
+  const PENDING_CONNECTION_TIMEOUT = 30000; // 30 seconds
+
+  // Helper function to register a device (move from pending to active)
+  function registerDevice(ws, chargePointId) {
+    // Clear pending connection timeout if exists
+    const pending = pendingConnections.get(ws);
+    if (pending && pending.timeout) {
+      clearTimeout(pending.timeout);
+    }
+    pendingConnections.delete(ws);
+
+    // Register the device
+    ws.connectedAt = new Date();
+    clients.set(chargePointId, ws);
+
+    // Initialize connector status tracking for this charger
+    if (!connectorStatus.has(chargePointId)) {
+      connectorStatus.set(chargePointId, new Map());
+    }
+    if (!activeTransactions.has(chargePointId)) {
+      activeTransactions.set(chargePointId, new Map());
+    }
+
+    console.log(`\n🔗 Charging station registered: ${chargePointId}\n`);
+    return chargePointId;
+  }
+
+  // Helper function to get chargePointId from WebSocket (from clients or pending)
+  function getChargePointId(ws) {
+    // First check if registered
+    for (const [chargePointId, registeredWs] of clients.entries()) {
+      if (registeredWs === ws) {
+        return chargePointId;
+      }
+    }
+    // Then check pending connections
+    const pending = pendingConnections.get(ws);
+    return pending ? pending.urlChargePointId : null;
+  }
 
   // Helper function to send OCPP command to charger
   function sendCommandToCharger(chargePointId, command, payload) {
@@ -61,54 +102,111 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
   }
 
   wss.on('connection', (ws, req) => {
-    // Extract charge point ID from URL
+    // Extract charge point ID from URL (may be 'unknown' if not in URL)
     // When using same port, req.url will be '/ocpp/CHARGE_POINT_ID'
     // When using separate port, req.url will be '/CHARGE_POINT_ID'
     const pathParts = req.url.split('/').filter(p => p);
     // If path starts with 'ocpp', the charge point ID is the next part
-    const chargePointId = pathParts[0] === 'ocpp'
+    const urlChargePointId = pathParts[0] === 'ocpp'
       ? (pathParts[1] || 'unknown')
       : (pathParts[0] || 'unknown');
 
-    if (chargePointId === 'unknown') {
-      console.warn(`⚠️  Warning: Could not extract charge point ID from URL: ${req.url}`);
-    }
+    // Store as pending connection (not registered until BootNotification or Heartbeat)
+    const timeout = setTimeout(() => {
+      if (pendingConnections.has(ws)) {
+        console.warn(`\n⚠️  Pending connection timeout: ${urlChargePointId} (from ${req.url}) - closing connection\n`);
+        ws.close();
+        pendingConnections.delete(ws);
+      }
+    }, PENDING_CONNECTION_TIMEOUT);
 
-    ws.connectedAt = new Date();
-    clients.set(chargePointId, ws);
-    // Initialize connector status tracking for this charger
-    if (!connectorStatus.has(chargePointId)) {
-      connectorStatus.set(chargePointId, new Map());
-    }
-    if (!activeTransactions.has(chargePointId)) {
-      activeTransactions.set(chargePointId, new Map());
-    }
-    console.log(`\n🔗 New charging station connected: ${chargePointId} (from ${req.url})\n`);
+    pendingConnections.set(ws, {
+      urlChargePointId,
+      connectedAt: new Date(),
+      timeout,
+    });
+
+    console.log(`\n⏳ New WebSocket connection (pending registration): ${urlChargePointId} (from ${req.url})\n`);
 
     ws.on('message', async (data) => {
       try {
         const [messageType, messageId, commandOrResponse, payload] = JSON.parse(data.toString());
 
+        // Get chargePointId from either registered or pending state
+        let chargePointId = getChargePointId(ws);
+        // Check if connection is pending (not yet registered)
+        const isPending = pendingConnections.has(ws);
+
         if (messageType === 3) {
           if (pendingRequests.has(messageId)) {
             const { resolve, command } = pendingRequests.get(messageId);
             pendingRequests.delete(messageId);
-            console.log(`✅ [${chargePointId}] ${command} Response:`, commandOrResponse);
+            // Get chargePointId again in case it was just registered
+            chargePointId = getChargePointId(ws);
+            console.log(`✅ [${chargePointId || 'unknown'}] ${command} Response:`, commandOrResponse);
             resolve(commandOrResponse);
           }
           return;
         }
 
         const command = commandOrResponse;
+        
+        // Handle registration on BootNotification or Heartbeat
+        if (command === 'BootNotification') {
+          // Extract chargePointId from BootNotification payload (authoritative source)
+          const payloadChargePointId = payload?.chargePointSerialNumber || null;
+          // Get URL-based ID from pending connection if available
+          const pending = pendingConnections.get(ws);
+          const urlChargePointId = pending?.urlChargePointId || null;
+          const finalChargePointId = payloadChargePointId || urlChargePointId || chargePointId || 'unknown';
+          
+          // Register device if pending (not yet registered)
+          if (isPending) {
+            chargePointId = registerDevice(ws, finalChargePointId);
+          } else if (chargePointId && chargePointId !== finalChargePointId) {
+            // Device already registered with different ID - this shouldn't happen, but log it
+            console.warn(`⚠️  BootNotification chargePointId mismatch: registered=${chargePointId}, payload=${finalChargePointId}`);
+            chargePointId = getChargePointId(ws); // Use the registered one
+          }
+          
+          console.log(`📥 [${chargePointId}] Received: ${command}`);
+          const response = { currentTime: new Date().toISOString(), interval: 10, status: 'Accepted' };
+          ws.send(JSON.stringify([3, messageId, response]));
+          return;
+        } else if (command === 'Heartbeat') {
+          // Register device if not already registered (use URL-extracted ID since heartbeat has no identity)
+          if (isPending) {
+            const pending = pendingConnections.get(ws);
+            const heartbeatChargePointId = pending?.urlChargePointId || 'unknown';
+            if (heartbeatChargePointId !== 'unknown') {
+              chargePointId = registerDevice(ws, heartbeatChargePointId);
+            }
+          }
+          
+          console.log(`📥 [${chargePointId || 'unknown'}] Received: ${command}`);
+          const response = { currentTime: new Date().toISOString() };
+          ws.send(JSON.stringify([3, messageId, response]));
+          return;
+        }
+
+        // For other commands, device must be registered
+        if (isPending) {
+          console.warn(`⚠️  Received ${command} from unregistered connection, ignoring`);
+          return;
+        }
+        
+        // Ensure we have a valid chargePointId for registered connections
+        chargePointId = getChargePointId(ws);
+        if (!chargePointId) {
+          console.warn(`⚠️  Cannot determine chargePointId for ${command}, ignoring`);
+          return;
+        }
+
         console.log(`📥 [${chargePointId}] Received: ${command}`);
 
         let response;
 
-        if (command === 'BootNotification') {
-          response = { currentTime: new Date().toISOString(), interval: 10, status: 'Accepted' };
-        } else if (command === 'Heartbeat') {
-          response = { currentTime: new Date().toISOString() };
-        } else if (command === 'Authorize') {
+        if (command === 'Authorize') {
           response = { idTagInfo: { status: 'Accepted' } };
         } else if (command === 'StartTransaction') {
           const transactionId = Math.floor(Math.random() * 100000);
@@ -184,13 +282,37 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
 
         ws.send(JSON.stringify([3, messageId, response]));
       } catch (error) {
-        console.error(`⚠️  Error from ${chargePointId}:`, error.message);
+        const errorChargePointId = getChargePointId(ws) || 'unknown';
+        console.error(`⚠️  Error from ${errorChargePointId}:`, error.message);
       }
     });
 
     ws.on('close', () => {
-      console.log(`\n❌ Charging station disconnected: ${chargePointId}\n`);
-      clients.delete(chargePointId);
+      // Get chargePointId from either registered or pending state
+      let chargePointId = getChargePointId(ws);
+      
+      // Clean up pending connection if exists
+      const pending = pendingConnections.get(ws);
+      if (pending) {
+        if (pending.timeout) {
+          clearTimeout(pending.timeout);
+        }
+        pendingConnections.delete(ws);
+        if (!chargePointId) {
+          chargePointId = pending.urlChargePointId;
+        }
+      }
+      
+      // Clean up registered connection if exists
+      if (chargePointId && clients.has(chargePointId)) {
+        clients.delete(chargePointId);
+        console.log(`\n❌ Charging station disconnected: ${chargePointId}\n`);
+      } else if (chargePointId) {
+        console.log(`\n❌ Pending connection closed: ${chargePointId}\n`);
+      } else {
+        console.log(`\n❌ Connection closed: unknown device\n`);
+      }
+      
       // Keep connector status and transactions in memory even after disconnect
       // They will be cleared when charger reconnects if needed
     });
