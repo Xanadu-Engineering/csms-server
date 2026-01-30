@@ -12,6 +12,16 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
   const activeTransactions = new Map();
   let messageIdCounter = 1;
   const PENDING_CONNECTION_TIMEOUT = 30000; // 30 seconds
+  const REQUIRED_PROTOCOLS = (process.env.OCPP_PROTOCOLS || 'ocpp1.6,ocpp1.6j')
+    .split(',')
+    .map(p => p.trim())
+    .filter(Boolean);
+  const REQUIRE_PROTOCOL = process.env.REQUIRE_OCPP_PROTOCOL !== 'false';
+  const AUTH_KEY = process.env.OCPP_AUTH_KEY || '';
+  const AUTH_HEADER = (process.env.OCPP_AUTH_HEADER || 'authentication-key').toLowerCase();
+  const AUTH_IN_BOOT = process.env.OCPP_AUTH_IN_BOOT !== 'false';
+  const AUTH_FIELD = process.env.OCPP_AUTH_FIELD || 'authenticationKey';
+  const AUTH_BASIC = process.env.OCPP_AUTH_BASIC !== 'false';
 
   // Helper function to register a device (move from pending to active)
   function registerDevice(ws, chargePointId) {
@@ -80,24 +90,94 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
 
   // WebSocket server setup
   let wss;
+  function parseBasicAuth(authHeader) {
+    if (!authHeader || !authHeader.startsWith('Basic ')) {
+      return null;
+    }
+    const encoded = authHeader.slice('Basic '.length);
+    try {
+      const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+      const [username, password] = decoded.split(':');
+      return { username, password };
+    } catch {
+      return null;
+    }
+  }
+
+  function hasValidAuthHeader(req) {
+    if (!AUTH_KEY) {
+      return true;
+    }
+    const headers = req.headers || {};
+    const directKey = headers[AUTH_HEADER] || headers[`x-${AUTH_HEADER}`];
+    if (typeof directKey === 'string' && directKey === AUTH_KEY) {
+      return true;
+    }
+    if (AUTH_BASIC) {
+      const basic = parseBasicAuth(headers.authorization);
+      if (basic && basic.password === AUTH_KEY) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function pickProtocol(protocols) {
+    if (!REQUIRE_PROTOCOL) {
+      for (const p of REQUIRED_PROTOCOLS) {
+        if (protocols.has(p)) {
+          return p;
+        }
+      }
+      return protocols.values().next().value || null;
+    }
+    for (const p of REQUIRED_PROTOCOLS) {
+      if (protocols.has(p)) {
+        return p;
+      }
+    }
+    return false;
+  }
+
+  function verifyClient(info) {
+    const path = info.req.url || '';
+    if (USE_SAME_PORT && !path.startsWith('/ocpp')) {
+      return false;
+    }
+    if (REQUIRE_PROTOCOL) {
+      const header = info.req.headers['sec-websocket-protocol'] || '';
+      const offered = header
+        .split(',')
+        .map(p => p.trim())
+        .filter(Boolean);
+      const hasRequired = offered.some(p => REQUIRED_PROTOCOLS.includes(p));
+      if (!hasRequired) {
+        return false;
+      }
+    }
+    if (AUTH_KEY && !AUTH_IN_BOOT) {
+      return hasValidAuthHeader(info.req);
+    }
+    return true;
+  }
+
   if (USE_SAME_PORT) {
     // Attach WebSocket server to HTTP server (for App Platform)
     // Use verifyClient to check path starts with /ocpp
     wss = new WebSocketServer({
       server,
-      verifyClient: (info) => {
-        // Verify that the path starts with /ocpp
-        const path = info.req.url || '';
-        if (!path.startsWith('/ocpp')) {
-          return false;
-        }
-        return true;
-      }
+      verifyClient,
+      handleProtocols: pickProtocol,
     });
     console.log('📡 WebSocket server attached to HTTP server on /ocpp path');
   } else {
     // Separate WebSocket server on different port
-    wss = new WebSocketServer({ host: HOST, port: OCPP_PORT });
+    wss = new WebSocketServer({
+      host: HOST,
+      port: OCPP_PORT,
+      verifyClient,
+      handleProtocols: pickProtocol,
+    });
     console.log(`📡 WebSocket server on separate port: ${OCPP_PORT}`);
   }
 
@@ -120,10 +200,12 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
       }
     }, PENDING_CONNECTION_TIMEOUT);
 
+    const authOkFromHeaders = hasValidAuthHeader(req);
     pendingConnections.set(ws, {
       urlChargePointId,
       connectedAt: new Date(),
       timeout,
+      authOk: authOkFromHeaders,
     });
 
     console.log(`\n⏳ New WebSocket connection (pending registration): ${urlChargePointId} (from ${req.url})\n`);
@@ -150,16 +232,29 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
         }
 
         const command = commandOrResponse;
-        
+
+        console.log(">>>>>>>>>", command, payload);
+
         // Handle registration on BootNotification or Heartbeat
         if (command === 'BootNotification') {
+          if (AUTH_KEY && AUTH_IN_BOOT) {
+            const pending = pendingConnections.get(ws);
+            const bootKey = payload?.[AUTH_FIELD] || null;
+            const authed = pending?.authOk || (bootKey && bootKey === AUTH_KEY);
+            if (!authed) {
+              const response = { currentTime: new Date().toISOString(), interval: 10, status: 'Rejected' };
+              ws.send(JSON.stringify([3, messageId, response]));
+              ws.close();
+              return;
+            }
+          }
           // Extract chargePointId from BootNotification payload (authoritative source)
           const payloadChargePointId = payload?.chargePointSerialNumber || null;
           // Get URL-based ID from pending connection if available
           const pending = pendingConnections.get(ws);
           const urlChargePointId = pending?.urlChargePointId || null;
           const finalChargePointId = payloadChargePointId || urlChargePointId || chargePointId || 'unknown';
-          
+
           // Register device if pending (not yet registered)
           if (isPending) {
             chargePointId = registerDevice(ws, finalChargePointId);
@@ -168,7 +263,7 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
             console.warn(`⚠️  BootNotification chargePointId mismatch: registered=${chargePointId}, payload=${finalChargePointId}`);
             chargePointId = getChargePointId(ws); // Use the registered one
           }
-          
+
           console.log(`📥 [${chargePointId}] Received: ${command}`);
           const response = { currentTime: new Date().toISOString(), interval: 10, status: 'Accepted' };
           ws.send(JSON.stringify([3, messageId, response]));
@@ -182,7 +277,7 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
               chargePointId = registerDevice(ws, heartbeatChargePointId);
             }
           }
-          
+
           console.log(`📥 [${chargePointId || 'unknown'}] Received: ${command}`);
           const response = { currentTime: new Date().toISOString() };
           ws.send(JSON.stringify([3, messageId, response]));
@@ -194,7 +289,7 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
           console.warn(`⚠️  Received ${command} from unregistered connection, ignoring`);
           return;
         }
-        
+
         // Ensure we have a valid chargePointId for registered connections
         chargePointId = getChargePointId(ws);
         if (!chargePointId) {
@@ -257,14 +352,16 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
             const currentStatus = statusMap.get(connectorId) || {};
             const txMap = activeTransactions.get(chargePointId);
             const hasActiveTransaction = txMap?.has(connectorId);
-            
+
             // Infer pluggedIn state from connector state
             // PREPARING, CHARGING, SUSPENDED_EV, FINISHING = plugged in
             // AVAILABLE without active transaction = not plugged in
             // AVAILABLE with active transaction = edge case, assume still plugged in until transaction stops
             const isPluggedIn = ['Preparing', 'Charging', 'SuspendedEV', 'Finishing'].includes(state) ||
               (state === 'Available' && hasActiveTransaction);
-            
+
+
+
             statusMap.set(connectorId, {
               ...currentStatus,
               state,
@@ -290,7 +387,7 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
     ws.on('close', () => {
       // Get chargePointId from either registered or pending state
       let chargePointId = getChargePointId(ws);
-      
+
       // Clean up pending connection if exists
       const pending = pendingConnections.get(ws);
       if (pending) {
@@ -302,7 +399,7 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
           chargePointId = pending.urlChargePointId;
         }
       }
-      
+
       // Clean up registered connection if exists
       if (chargePointId && clients.has(chargePointId)) {
         clients.delete(chargePointId);
@@ -312,7 +409,7 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
       } else {
         console.log(`\n❌ Connection closed: unknown device\n`);
       }
-      
+
       // Keep connector status and transactions in memory even after disconnect
       // They will be cleared when charger reconnects if needed
     });
@@ -342,4 +439,3 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
     getConnectorStatus,
   };
 }
-
