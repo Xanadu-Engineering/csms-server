@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+require('dotenv').config();
 const http = require('http');
 const port = process.env.PORT || 3020;
 
@@ -24,4 +25,3 @@ req.on('timeout', () => {
 });
 
 req.end();
-

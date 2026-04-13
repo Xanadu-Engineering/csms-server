@@ -18,6 +18,7 @@ Dashboard interface for monitoring and controlling OCPP charging stations.
 
 ```bash
 npm install
+cp .env.example .env
 ```
 
 ## Usage
