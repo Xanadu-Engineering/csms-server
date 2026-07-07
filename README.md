@@ -1,62 +1,74 @@
-# CSMS Server - Charging Station Management System
+# CSMS Server
 
-Dashboard interface for monitoring and controlling OCPP charging stations.
+Lightweight CSMS dashboard and OCPP 1.6 WebSocket server for monitoring and
+controlling connected chargers.
 
 ## Features
 
-- 📊 Live statistics of connected chargers
-- 📡 Real-time charger list (auto-refresh every 5 seconds)
-- 🔍 Detailed charger information
-- 🎮 Remote control capabilities:
-  - Start/Stop charging transactions
-  - Unlock connectors
-  - Reset chargers
-  - Manage configuration
-- 📋 Response log for all commands
+- Live list of connected chargers.
+- Per-connector state, plug status, and active transaction visibility.
+- Remote OCPP commands:
+  - `RemoteStartTransaction`
+  - `RemoteStopTransaction`
+  - `UnlockConnector`
+  - `Reset`
+  - `ChangeConfiguration`
+  - `GetConfiguration`
+- Automatic WebSocket liveness checks to remove stale charger sessions after
+  unclean disconnects.
 
-## Installation
+## Requirements
+
+- Node.js 18+
+- npm
+
+## Run locally
 
 ```bash
 npm install
-cp .env.example .env
-```
-
-## Usage
-
-```bash
 npm start
 ```
 
-Open your browser to [http://localhost:3000](http://localhost:3000)
-
-**Prerequisites:** Make sure the Central System is running on port 9221.
-
-## API Endpoints
-
-The CSMS server provides a proxy to the Central System HTTP API:
-
-- `GET /api/chargers` - List all connected chargers
-- `GET /api/chargers/:id` - Get charger details
-- `POST /api/chargers/:id/remote-start` - Start charging
-- `POST /api/chargers/:id/remote-stop` - Stop charging
-- `POST /api/chargers/:id/unlock` - Unlock connector
-- `POST /api/chargers/:id/reset` - Reset charger
-- `POST /api/chargers/:id/change-configuration` - Change configuration
-- `POST /api/chargers/:id/get-configuration` - Get configuration
+By default the HTTP dashboard runs on `http://localhost:3020`.
 
 ## Configuration
 
-The server connects to the Central System API at `http://localhost:9221/api` by
-default.
+Environment variables:
 
-To change this, edit `src/server.js`:
+- `PORT` - HTTP port for the dashboard and, when `USE_SAME_PORT=true`, OCPP
+  WebSocket traffic.
+- `HOST` - bind address. Defaults to `0.0.0.0`.
+- `USE_SAME_PORT` - set to `true` to expose OCPP on `/ocpp/:chargePointId`
+  through the same HTTP server.
+- `OCPP_PORT` - separate WebSocket port when `USE_SAME_PORT=false`.
+- `WS_URL` - optional public WebSocket base URL shown in logs.
+- `WS_PING_INTERVAL_MS` - heartbeat interval used to detect stale charger
+  sockets. Defaults to `15000`.
 
-```javascript
-const CENTRAL_SYSTEM_API = "http://localhost:9221/api"
-```
+## API
 
-## Technology Stack
+- `GET /api/chargers` - list connected chargers
+- `GET /api/chargers/:id` - get charger details
+- `GET /api/chargers/:id/connectors` - list connector state for a charger
+- `GET /api/chargers/:id/connectors/:connectorId` - get one connector
+- `POST /api/chargers/:id/remote-start` - start charging on a connector
+- `POST /api/chargers/:id/remote-stop` - stop an active transaction
+- `POST /api/chargers/:id/unlock` - unlock a connector
+- `POST /api/chargers/:id/reset` - send a reset command
+- `POST /api/chargers/:id/change-configuration` - update configuration
+- `POST /api/chargers/:id/get-configuration` - fetch configuration
 
-- **Express** - Web server
-- **Axios** - HTTP client for API calls
-- **Pure JavaScript** - No frontend framework, lightweight UI
+`POST /api/chargers/:id/remote-stop` accepts either:
+
+- `transactionId`
+- `connectorId`
+
+If neither is provided and exactly one active transaction exists, the server
+will stop that transaction automatically.
+
+## Notes
+
+- Connector state remains available after disconnect so the dashboard can show
+  the most recent charger status when the charger reconnects.
+- The control panel resolves remote stop requests from live connector state, so
+  users do not need to manually copy transaction IDs from the dashboard.

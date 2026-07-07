@@ -12,6 +12,7 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
   const activeTransactions = new Map();
   let messageIdCounter = 1;
   const PENDING_CONNECTION_TIMEOUT = 30000; // 30 seconds
+  const WS_PING_INTERVAL_MS = Number(process.env.WS_PING_INTERVAL_MS || 15000);
   const REQUIRED_PROTOCOLS = (process.env.OCPP_PROTOCOLS || 'ocpp1.6,ocpp1.6j')
     .split(',')
     .map(p => p.trim())
@@ -32,6 +33,12 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
     }
     pendingConnections.delete(ws);
 
+    const existingWs = clients.get(chargePointId);
+    if (existingWs && existingWs !== ws) {
+      unregisterConnection(existingWs, 'replaced by a newer session');
+      existingWs.terminate();
+    }
+
     // Register the device
     ws.connectedAt = new Date();
     clients.set(chargePointId, ws);
@@ -46,6 +53,35 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
 
     console.log(`\n🔗 Charging station registered: ${chargePointId}\n`);
     return chargePointId;
+  }
+
+  function unregisterConnection(ws, reason = 'Connection closed') {
+    // Get chargePointId from either registered or pending state before cleanup.
+    let chargePointId = getChargePointId(ws);
+
+    const pending = pendingConnections.get(ws);
+    if (pending) {
+      if (pending.timeout) {
+        clearTimeout(pending.timeout);
+      }
+      pendingConnections.delete(ws);
+      if (!chargePointId) {
+        chargePointId = pending.urlChargePointId;
+      }
+    }
+
+    if (chargePointId && clients.get(chargePointId) === ws) {
+      clients.delete(chargePointId);
+      console.log(`\n❌ Charging station disconnected: ${chargePointId} (${reason})\n`);
+      return;
+    }
+
+    if (chargePointId) {
+      console.log(`\n❌ Pending connection closed: ${chargePointId} (${reason})\n`);
+      return;
+    }
+
+    console.log(`\n❌ Connection closed: unknown device (${reason})\n`);
   }
 
   // Helper function to get chargePointId from WebSocket (from clients or pending)
@@ -182,6 +218,8 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
   }
 
   wss.on('connection', (ws, req) => {
+    ws.isAlive = true;
+
     // Extract charge point ID from URL (may be 'unknown' if not in URL)
     // When using same port, req.url will be '/ocpp/CHARGE_POINT_ID'
     // When using separate port, req.url will be '/CHARGE_POINT_ID'
@@ -210,6 +248,10 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
 
     console.log(`\n⏳ New WebSocket connection (pending registration): ${urlChargePointId} (from ${req.url})\n`);
 
+    ws.on('pong', () => {
+      ws.isAlive = true;
+    });
+
     ws.on('message', async (data) => {
       try {
         const [messageType, messageId, commandOrResponse, payload] = JSON.parse(data.toString());
@@ -232,8 +274,6 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
         }
 
         const command = commandOrResponse;
-
-        console.log(">>>>>>>>>", command, payload);
 
         // Handle registration on BootNotification or Heartbeat
         if (command === 'BootNotification') {
@@ -385,34 +425,25 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
     });
 
     ws.on('close', () => {
-      // Get chargePointId from either registered or pending state
-      let chargePointId = getChargePointId(ws);
-
-      // Clean up pending connection if exists
-      const pending = pendingConnections.get(ws);
-      if (pending) {
-        if (pending.timeout) {
-          clearTimeout(pending.timeout);
-        }
-        pendingConnections.delete(ws);
-        if (!chargePointId) {
-          chargePointId = pending.urlChargePointId;
-        }
-      }
-
-      // Clean up registered connection if exists
-      if (chargePointId && clients.has(chargePointId)) {
-        clients.delete(chargePointId);
-        console.log(`\n❌ Charging station disconnected: ${chargePointId}\n`);
-      } else if (chargePointId) {
-        console.log(`\n❌ Pending connection closed: ${chargePointId}\n`);
-      } else {
-        console.log(`\n❌ Connection closed: unknown device\n`);
-      }
-
-      // Keep connector status and transactions in memory even after disconnect
-      // They will be cleared when charger reconnects if needed
+      unregisterConnection(ws, 'socket closed');
     });
+  });
+
+  const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach((ws) => {
+      if (ws.isAlive === false) {
+        unregisterConnection(ws, 'heartbeat timeout');
+        ws.terminate();
+        return;
+      }
+
+      ws.isAlive = false;
+      ws.ping();
+    });
+  }, WS_PING_INTERVAL_MS);
+
+  wss.on('close', () => {
+    clearInterval(heartbeatInterval);
   });
 
   // Helper function to get connector status for a charger

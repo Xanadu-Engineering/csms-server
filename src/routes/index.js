@@ -1,13 +1,53 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export default function createRoutes(clients, sendCommandToCharger, getConnectorStatus) {
   const router = express.Router();
+
+  function getChargerConnectors(chargePointId) {
+    return getConnectorStatus ? getConnectorStatus(chargePointId) : [];
+  }
+
+  function parsePositiveInteger(value) {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  function resolveTransactionId(chargePointId, body = {}) {
+    const connectors = getChargerConnectors(chargePointId);
+    const requestedConnectorId = parsePositiveInteger(body.connectorId);
+    if (requestedConnectorId) {
+      const connector = connectors.find((item) => item.connectorId === requestedConnectorId);
+      if (!connector) {
+        return { error: `Connector ${requestedConnectorId} not found` };
+      }
+      if (!connector.transactionId) {
+        return { error: `Connector ${requestedConnectorId} has no active transaction` };
+      }
+      return { transactionId: connector.transactionId };
+    }
+
+    const requestedTransactionId = parsePositiveInteger(body.transactionId);
+    if (requestedTransactionId) {
+      return { transactionId: requestedTransactionId };
+    }
+
+    const activeConnectors = connectors.filter((item) => item.transactionId);
+    if (activeConnectors.length === 1) {
+      return { transactionId: activeConnectors[0].transactionId };
+    }
+    if (activeConnectors.length === 0) {
+      return { error: 'No active transaction found' };
+    }
+
+    return {
+      error: 'Multiple active transactions found; provide connectorId or transactionId',
+    };
+  }
 
   // Get all connected chargers
   router.get('/api/chargers', (req, res) => {
@@ -46,7 +86,7 @@ export default function createRoutes(clients, sendCommandToCharger, getConnector
       return res.status(404).json({ error: 'Charger not found' });
     }
 
-    const connectors = getConnectorStatus ? getConnectorStatus(req.params.id) : [];
+    const connectors = getChargerConnectors(req.params.id);
     res.json({
       chargerId: req.params.id,
       connectors
@@ -62,7 +102,7 @@ export default function createRoutes(clients, sendCommandToCharger, getConnector
     }
 
     const connectorId = Number(req.params.connectorId);
-    const connectors = getConnectorStatus ? getConnectorStatus(req.params.id) : [];
+    const connectors = getChargerConnectors(req.params.id);
     const connector = connectors.find(c => c.connectorId === connectorId);
 
     if (!connector) {
@@ -78,20 +118,11 @@ export default function createRoutes(clients, sendCommandToCharger, getConnector
   // Remote Start
   router.post('/api/chargers/:id/remote-start', async (req, res) => {
     try {
-      // #region agent log
-      try{fs.appendFileSync('/Users/a/Desktop/csms-full-demo/.cursor/debug.log',JSON.stringify({location:'routes/index.js:80',message:'Remote start request received',data:{chargerId:req.params.id,requestBody:req.body},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})+'\n');}catch(e){}
-      // #endregion
       const { idTag = 'REMOTE-TAG', connectorId = 1 } = req.body;
-      // #region agent log
-      try{fs.appendFileSync('/Users/a/Desktop/csms-full-demo/.cursor/debug.log',JSON.stringify({location:'routes/index.js:84',message:'Extracted connectorId from request',data:{connectorId:connectorId,idTag:idTag},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})+'\n');}catch(e){}
-      // #endregion
       const response = await sendCommandToCharger(req.params.id, 'RemoteStartTransaction', {
         idTag,
         connectorId
       });
-      // #region agent log
-      try{fs.appendFileSync('/Users/a/Desktop/csms-full-demo/.cursor/debug.log',JSON.stringify({location:'routes/index.js:91',message:'Remote start command sent',data:{connectorId:connectorId,response:response},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})+'\n');}catch(e){}
-      // #endregion
       res.json({ success: true, response });
     } catch (error) {
       res.status(500).json({ success: false, error: error.message });
@@ -101,14 +132,19 @@ export default function createRoutes(clients, sendCommandToCharger, getConnector
   // Remote Stop
   router.post('/api/chargers/:id/remote-stop', async (req, res) => {
     try {
-      const { transactionId } = req.body;
-      if (!transactionId) {
-        return res.status(400).json({ success: false, error: 'transactionId is required' });
+      const resolution = resolveTransactionId(req.params.id, req.body);
+      if (resolution.error) {
+        return res.status(400).json({ success: false, error: resolution.error });
       }
+
       const response = await sendCommandToCharger(req.params.id, 'RemoteStopTransaction', {
-        transactionId
+        transactionId: resolution.transactionId
       });
-      res.json({ success: true, response });
+      res.json({
+        success: true,
+        response,
+        transactionId: resolution.transactionId,
+      });
     } catch (error) {
       res.status(500).json({ success: false, error: error.message });
     }
@@ -172,4 +208,3 @@ export default function createRoutes(clients, sendCommandToCharger, getConnector
 
   return router;
 }
-
