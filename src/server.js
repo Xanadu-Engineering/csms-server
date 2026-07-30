@@ -10,13 +10,29 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.disable('etag');
 const PORT = process.env.PORT || 3020;
 const OCPP_PORT = process.env.OCPP_PORT || 9220;
 const HOST = process.env.HOST || '0.0.0.0';
 const USE_SAME_PORT = process.env.USE_SAME_PORT === 'true' || process.env.OCPP_PORT === undefined;
 
+app.use((req, res, next) => {
+  if (req.path === '/' || req.path === '/csms.html' || req.path.startsWith('/api/')) {
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      Pragma: 'no-cache',
+      Expires: '0',
+      'Surrogate-Control': 'no-store',
+    });
+  }
+  next();
+});
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../public')));
+app.use(express.static(path.join(__dirname, '../public'), {
+  etag: false,
+  lastModified: false,
+  maxAge: 0,
+}));
 
 const serverUrl = process.env.SERVER_URL || `http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`;
 const wsUrl = USE_SAME_PORT
@@ -30,28 +46,35 @@ console.log(`🌐 Listening on: ${HOST}`);
 console.log('');
 
 const server = createServer(app);
-const { wss, clients, sendCommandToCharger, getConnectorStatus } = setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT);
+const { wss, clients, sendCommandToCharger, getConnectorStatus, getSessions, getChargers, flushState } = setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT);
 
-const routes = createRoutes(clients, sendCommandToCharger, getConnectorStatus);
+const routes = createRoutes(clients, sendCommandToCharger, getConnectorStatus, getSessions, getChargers);
 app.use(routes);
 
 server.listen(PORT, HOST, () => {
   console.log('Available endpoints:');
   console.log('  GET  /health (health check)');
   console.log('  GET  /api/chargers');
+  console.log('  GET  /api/sessions');
   console.log('  POST /api/chargers/:id/remote-start');
   console.log('  POST /api/chargers/:id/remote-stop');
   console.log('  POST /api/chargers/:id/unlock');
   console.log('  POST /api/chargers/:id/reset');
   console.log('  POST /api/chargers/:id/change-configuration');
   console.log('  POST /api/chargers/:id/get-configuration');
+  console.log('  POST /api/chargers/:id/install-certificate');
+  console.log('  GET  /api/certificates');
   if (USE_SAME_PORT) {
     console.log(`  WS   /ocpp/:chargePointId (WebSocket on same port)`);
   }
 });
 
-process.on('SIGINT', () => {
+function shutdown(signal) {
+  flushState();
   console.log('\n\n👋 Shutting down CSMS Server...');
   wss.close();
   process.exit(0);
-});
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
