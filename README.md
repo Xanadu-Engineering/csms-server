@@ -69,6 +69,16 @@ Environment variables:
   `ocpp2.0.1,ocpp1.6,ocpp1.6j`.
 - `CSMS_STATE_FILE` - durable state snapshot path. Defaults to
   `data/csms-state.json`; set to `:memory:` to disable persistence.
+- `OCPP_CUSTOM_BALANCE` - mock balance returned to proprietary charger
+  `DataTransfer` requests. Defaults to `1000000`; set to `off` to accept the
+  request without returning balance data.
+- `OCPP_DATA_TRANSFER_BALANCE_FIELD` - vendor-specific balance property name
+  used in the `DataTransfer` response. Defaults to `custom_balance`.
+
+The mock balance is a vendor extension, not a standard OCPP authorization
+field. OCPP 1.6 receives it as a JSON-encoded string while OCPP 2.0.1 receives
+it as a JSON object. Confirm the field name and response shape against the
+charging-station vendor's integration specification.
 
 ## API
 

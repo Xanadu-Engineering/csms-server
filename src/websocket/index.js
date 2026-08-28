@@ -32,6 +32,38 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
   const AUTH_IN_BOOT = process.env.OCPP_AUTH_IN_BOOT !== 'false';
   const AUTH_FIELD = process.env.OCPP_AUTH_FIELD || 'authenticationKey';
   const AUTH_BASIC = process.env.OCPP_AUTH_BASIC !== 'false';
+  const DATA_TRANSFER_BALANCE_FIELD = process.env.OCPP_DATA_TRANSFER_BALANCE_FIELD || 'custom_balance';
+  const CUSTOM_BALANCE = parseCustomBalance(process.env.OCPP_CUSTOM_BALANCE);
+
+  function parseCustomBalance(configuredBalance) {
+    if (configuredBalance === undefined) {
+      return 1000000;
+    }
+    if (['', 'false', 'none', 'off'].includes(configuredBalance.trim().toLowerCase())) {
+      return null;
+    }
+
+    const balance = Number(configuredBalance);
+    if (!Number.isFinite(balance) || balance < 0) {
+      throw new Error('OCPP_CUSTOM_BALANCE must be a non-negative number or "off"');
+    }
+    return balance;
+  }
+
+  function createDataTransferResponse(protocol) {
+    const response = { status: 'Accepted' };
+    if (CUSTOM_BALANCE === null) {
+      return response;
+    }
+
+    const data = { [DATA_TRANSFER_BALANCE_FIELD]: CUSTOM_BALANCE };
+    return {
+      ...response,
+      // OCPP 1.6 restricts DataTransfer.conf data to a string. OCPP 2.0.1
+      // permits arbitrary JSON data, which is more convenient for vendor extensions.
+      data: protocol === 'ocpp2.0.1' ? data : JSON.stringify(data),
+    };
+  }
 
   function persistState() {
     if (!STATE_FILE) return;
@@ -577,6 +609,13 @@ export default function setupWebSocket(server, USE_SAME_PORT, HOST, OCPP_PORT) {
           response = ws.protocol === 'ocpp2.0.1'
             ? { idTokenInfo: { status: 'Accepted' } }
             : { idTagInfo: { status: 'Accepted' } };
+        } else if (command === 'DataTransfer') {
+          response = createDataTransferResponse(ws.protocol);
+          console.log(
+            `🪙 [${chargePointId}] Accepted DataTransfer`
+            + `${payload?.vendorId ? ` from ${payload.vendorId}` : ''}`
+            + `${payload?.messageId ? ` (${payload.messageId})` : ''}`,
+          );
         } else if (command === 'StartTransaction') {
           const transactionId = Math.floor(Math.random() * 100000);
           const connectorId = payload?.connectorId || 1;
